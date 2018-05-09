@@ -1,0 +1,169 @@
+---
+title: "Machine Learning Project - Weight Lifting Exercises"
+author: "Esteban Rodriguez Llamazares"
+date: "8 de mayo de 2018"
+output: html_document
+---
+## Background
+
+I used the WLE dataset, which takes measurements of body movements via four sensors while the test subject does a given excercise in a correct or incorrect manner. The objective of the project was to create a model that predicts whether an excercis was performed correctly or incorrectly. In the following text, the Classe A is the correct and classes B-E are that same excercise performed incorrectly. I would also like to state that there was no codebook given to the dataset provided and hence could only approach the problem in a statistical manner and have no certainty about the posible cofounding that could be done.
+
+
+## Data cleaning and separating
+
+From the 159 variables that could be elegible from the original training set I only took 60, which were the only ones which contained any information what-so-ever in the test data set.Why are those the variables that give any information, at this point cannot be assured. Besides that, I disregarded any row in which the variable "New Window" took a value of "YES" since it appeared that the measurements in that row were analyses of the previous window, and besides, the test dataset didn't contain any of such rows. From this point foreward I will call the given test data as the project's validation data. The given training data was separated in a train/test sets (p=0.75).
+
+```{r, include=FALSE, cache=TRUE, echo=FALSE}
+library(caret)
+library(randomForest)
+library(tictoc)
+library(doParallel)
+library(ggplot2)
+library(lattice)
+
+data<-read.csv("pml-training.csv",header = TRUE,stringsAsFactors = FALSE) #train/test data set
+testdata<-read.csv("pml-testing.csv",header = TRUE,stringsAsFactors = FALSE) #validation data set
+elim<-sapply(testdata,is.logical) #elimination of rows that don't have any information in the 
+# validation data set
+data<-data[,elim==FALSE]
+testdata<-testdata[,elim==FALSE]
+
+nonnw<-data[data$new_window=="no",] #eliminating rows which are means (no inclusion in validation
+#so no pint in taking them)
+nonnw$classe<-as.factor(nonnw$classe) #convert to factor so it works
+
+set.seed(2234)
+inTrian<-createDataPartition(y=nonnw$classe,p=0.75,list=FALSE) 
+train1<-nonnw[inTrian,] #train data set
+test1<-nonnw[-inTrian,] #test data set
+test1$classe<-as.factor(test1$classe)
+train1$classe<-as.factor(train1$classe)
+my_control <- trainControl(method = "cv", number = 3 ) #Control method for crossvalidation
+
+```
+
+## Training
+
+I used three different methods: Random Forest, Random Forests using PCA and Linear Discriminant Analyses asuming there was some probabilistic strcuture beneath the data, and after that I used Bagging to combine the predictors. For cross validation I used "cv" (CrossValidation) with 3 samples, as the data was large enough (~14,000 obsertions). The choosing of these models was based on the paper found at the website of the WLE Dataset.
+
+#### Random Forest
+
+```{r model2,cache=TRUE,warning=FALSE}
+model2<-train(x=train1[,8:59],y=train1$classe,method="parRF",ntree=50,trControl=my_control)
+```
+
+#### Random Forest with PCA's
+```{r model1,cache=TRUE, warning=FALSE}
+prep<-preProcess(train1[,-60],method="pca",thresh=.9)
+trainpred<-predict(prep,newdata =train1[,-60]) 
+train3<-data.frame(trainpred[4:24],train1$classe) 
+model<-train(train1.classe~.,method="parRF",data=train3,ntree=50,trControl=my_control)
+```
+
+#### Linear Discriminant Analyses
+```{r model3,cache=TRUE, warning=FALSE}
+model3<-train(x=train1[,8:59],y=train1$classe,method="lda",trControl=my_control)
+```
+
+
+##Testing
+After producing the models, we tested all three of them into the test data set and calculated the confusion matrix for each one of them, the results being the following:
+
+#### Random Forest
+
+```{r test2,cache=TRUE,warning=FALSE,results="hold",echo=FALSE}
+tpred2<-predict(model2,test1[,8:59]) #prediction on test data
+x<-confusionMatrix(test1$classe,predict(model2,test1[,8:59]))
+x$table
+x$overall
+```
+
+#### Random Forest with PCA's
+```{r test1,cache=TRUE, warning=FALSE,results="hold",echo=FALSE}
+testpred<-predict(prep,newdata = test1[,-60]) #test data transfromation to pca's
+tpred1<-predict(model,testpred[,4:24]) #prediction on test data
+x<-confusionMatrix(test1$classe,predict(model,testpred[,4:24]))
+x$table
+x$overall
+```
+
+#### Linear Discriminant Analyses
+```{r test3,cache=TRUE, warning=FALSE,results="hold",echo=FALSE}
+tpred3<-predict(model3,test1[,8:59])#prediction on test data
+x<-confusionMatrix(test1$classe,predict(model3,test1[,8:59]))
+x$table
+x$overall
+```
+
+As it can be seen both Random Forest models have a prety good out-of-sample accuracy (too good if you ask me), further more we analyse the posibility of using Bagging to combine the predictors.
+
+#### Linear Discriminant Analyses
+```{r bag,cache=TRUE, warning=FALSE}
+combdf<-data.frame(tpred1,tpred3,tpred2,classe=test1$classe)
+combmodel<-train(classe~.,data=combdf,method="parRF",ntree=50,trControl=my_control)
+```
+```{r bag2,cache=TRUE, warning=FALSE,results="hold",echo=FALSE}
+x<-confusionMatrix(test1$classe,predict(combmodel,combdf[,1:3]))
+x$table
+x$overall
+```
+
+After looking at the results of this last confusion matrix we can see there is no much difference between taking the Random Forest versus the three models "bagged" together, so for the sake of interpretation I decided to take the Random Forest by itself even at the cost of loosing some accuracy. The most importan variables in this models are the roll measured in the belt and the pitch measured in the forearm, we take this two into account to do some plotting.
+
+```{r var,cache=TRUE, warning=FALSE,results="hold",echo=FALSE}
+varImp(model2)
+```
+
+```{r plot1,cache=TRUE, fig.align="center", fig.height=2.8, echo=FALSE}
+qplot(roll_belt,pitch_forearm,colour=classe,data=test1,xlim=c(-36,36))
+```
+
+Form the previous figure it can be seen that a variance in the roll of the belt might denote a class D or E type of excercise, this might be a bit clearer in the following Figure: 
+
+```{r plot2,cache=TRUE, fig.align="center", fig.height=2.8, echo=FALSE}
+xyplot(pitch_forearm ~ roll_belt | classe, data=test1, layout=c(5,1),xlim=c(-36,36), panel = function(x, y, ...) {
+       panel.xyplot(x, y) 
+       panel.abline(h = median(y), lty = 2) 
+   })
+```
+
+Analysing each of this two regressors we can see that in fact a higher variance in the roll of the belt makes up for a class D or E movement, whilst the average pitch in the forearm should be as close to zero as posible to denote a perfect excercise (classe A), which makes sense because you don't want the forearm moving up and down whilst doing dumpbells.
+
+```{r plot3,cache=TRUE, fig.align="center", fig.height=2.8, echo=FALSE}
+qplot(classe,roll_belt,data=test1,geom=c("boxplot"),ylim=c(-36,36),color=classe)
+```
+
+```{r plot4,cache=TRUE, fig.align="center", fig.height=2.8, echo=FALSE}
+qplot(classe,pitch_forearm,data=train1,geom=c("boxplot"),color=classe)
+```
+
+Finally we use the each of the models to predict the classe of the validation dataset, giving the following results, the Random Forest results yields:
+
+```{r final,cache=TRUE, warning=FALSE,results="hold",echo=FALSE}
+ftestpred1<-predict(prep,newdata=testdata[-60]) #validation data transformation to pca's
+fpred1<-predict(model,ftestpred1[,4:24]) #prediction on validation data
+fpred2<-predict(model2,testdata[,8:59]) #prediction on validation data
+fpred3<-predict(model3,testdata[,8:59]) #prediction on validation data
+finaldf<-data.frame(fpred1,fpred3,fpred2) # validation predictions of models dataframe
+names(finaldf)<-c("tpred1","tpred3","tpred2") #same names as in models s it works
+final<-predict(combmodel,finaldf) #prediction of predictions of validation data
+fpred2
+```
+
+The RF with the PCA's gives:
+```{r final2,cache=TRUE, warning=FALSE,results="hold",echo=FALSE}
+fpred1
+```
+
+The LDA:
+```{r final3,cache=TRUE, warning=FALSE,results="hold",echo=FALSE}
+fpred3
+```
+
+And the bagged one:
+```{r final4,cache=TRUE, warning=FALSE,results="hold",echo=FALSE}
+final
+```
+
+ As it can be seen, the results of the bagged model and the simple random forest one are exactly the same for the validation data set, which coincidentaly is the correct answer of such validation set.
+ 
